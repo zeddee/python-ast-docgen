@@ -134,29 +134,30 @@ def parse_ast(ast_tree: ast.AST) -> List[Dict[str, Any]]:
 
             out.append(
               {
-                "type": "ANNASSIGN",
-                "name": [this_name],
-                "value": parse_primitive(node.value),
-                "assign_type": this_type,
+                  "type": "ANNASSIGN",
+                  "name": [this_name],
+                  "value": parse_primitive(node.value),
+                  "assign_type": this_type,
               }
             )
 
 
         if isinstance(node, ast.Attribute):
             this_node = {
-              "type": "ATTRIBUTE",
-              "name": node.body.value.id,
-              "attr": node.body.attr,
+                "type": "ATTRIBUTE",
+                "name": node.body.value.id,
+                "attr": node.body.attr,
             }
             pass
 
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
             this_node = {
-              "type": "FUNCTION",
-              "name": node.name,
-              "args": parse_func_args(node.args),
-              "body": parse_ast(node),
-              "decorator_list": parse_ast(node),
+                "type": "FUNCTION",
+                "name": node.name,
+                "args": parse_func_args(node.args),
+                "body": parse_ast(node),
+                "decorator_list": parse_ast(node),
+                "doc": ast.get_docstring(node),
             }
             out.append(this_node)
 
@@ -165,6 +166,7 @@ def parse_ast(ast_tree: ast.AST) -> List[Dict[str, Any]]:
                 "type": "CLASS",
                 "name": node.name,
                 "body": parse_ast(node),
+                "doc": ast.get_docstring(node),
             }
             out.append(this_node)
 
