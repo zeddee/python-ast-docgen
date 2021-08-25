@@ -18,6 +18,14 @@ Useful when you need to:
 - document a specific python file without having to import
   or install its dependency tree.
 
+Requirements
+==============
+
+- Tested on Python 3.6.8
+- `astunparser 1.6.3`__ to polyfill for Python versions < 3.9
+
+__ https://pypi.org/project/astunparse/
+
 Usage
 ========
 
