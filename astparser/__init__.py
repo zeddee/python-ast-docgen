@@ -1,4 +1,5 @@
 import ast
+from astunparse import unparse #: polyfill for pre-3.9
 from typing import Optional, List, Any, Dict, Union
 
 def load_ast_from_file(filename: str) -> ast.AST:
@@ -26,29 +27,99 @@ def walk_ast_children(node: ast.AST) -> Optional[List]:
 
     return out
 
-def get_name_str(node: ast.AST) -> str:
-    if not isinstance(node, ast.Name):
-        return None
 
-    return node.id
-
-
-def parse_primitive(node: ast.AST) -> Union[str, int]:
+def parse_literal(node: ast.AST) -> \
+    Union[str, int, Dict[Any, Any], List[Any]]:
     """
     Parse primitive nodes and return their values.
 
     If not an expected primitive, then
     just return the ast.dump.
     """
+    if isinstance(node, ast.Name):
+        # ast.Name are technically strings
+        # So treat as literal
+        return node.id
+
     if isinstance(node, ast.Str):
         return node.s
 
     if isinstance(node, ast.Num):
         return node.n
 
+    if isinstance(node, ast.Dict):
+        out = {}
+        zipped = zip(node.keys, node.values)
+        for i in zipped:
+            out[parse_literal(i[0])] = parse_literal(i[1])
+        return out
+
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return \
+            [parse_literal(i) for i in node.elts]
+
+    if isinstance(node, (ast.BinOp, ast.BoolOp)):
+        return parse_op(node)
+
+    if isinstance(node, ast.Call):
+        return unparse(node)
+
+    else:
+        return unparse(node)
+
+
+def parse_op(node: ast.AST) -> str:
+    """
+    Parse an operation e.g. 1 * 2
+
+    Returns:
+        String, because we don't want to handle
+        the complexity of calculating an op.
+    """
+    assert(isinstance(node, (ast.BinOp, ast.BoolOp, ast.operator))), \
+        f"Unexpected: {node} is not ast.operator"
+
+    OPS = {
+            ast.Add: '+',
+            ast.Sub: '-',
+            ast.Mult: '*',
+            ast.Div: '/',
+            ast.FloorDiv: '//',
+            ast.Mod: '%',
+            ast.Pow: '**',
+            ast.LShift: '<<',
+            ast.RShift: '>>',
+            ast.BitOr: '|',
+            ast.BitXor: '^',
+            ast.BitAnd: '&',
+            ast.MatMult: '@',
+            ast.Or: "or",
+            ast.And: "and",
+        }
+
+    if isinstance(node, ast.BinOp):
+        return " ".join([
+          str(parse_literal(node.left)),
+          parse_op(node.op),
+          str(parse_literal(node.right)),
+        ])
+
+
+    if isinstance(node, ast.BoolOp):
+        op = ast.dump(node.op)
+        return f" {op} ".join(
+          [str(parse_literal(i)) for i in node.values],
+        )
+
+    else:
+        for op, val in OPS.items():
+            if isinstance(node, op):
+                return val
+
 
 def parse_func_args(node: ast.AST) -> Dict[str, Any]:
-    assert(isinstance(node, ast.arguments)), f"{node} is not an ast.arguments node"
+    assert(isinstance(node, ast.arguments)),\
+        f"{node} is not an ast.arguments node"
 
     def parse_arglist(
         arglist: Union[ast.arg, List[ast.arg]],
@@ -68,7 +139,7 @@ def parse_func_args(node: ast.AST) -> Dict[str, Any]:
                 "type": arg_type,
                 "name": arglist.arg,
                 "arg_type": \
-                    parse_ast(arglist.annotation) \
+                    parse_literal(arglist.annotation) \
                     if arglist.annotation else None,
             }]
 
@@ -77,13 +148,12 @@ def parse_func_args(node: ast.AST) -> Dict[str, Any]:
                 "type": arg_type,
                 "name": i.arg,
                 "arg_type": \
-                    parse_ast(i.annotation) \
+                    parse_literal(i.annotation) \
                     if i.annotation else None,
             }
             args.append(this_arg)
 
         return args
-
 
     return {
       "args": parse_arglist(node.args, "ARG"),
@@ -107,17 +177,12 @@ def parse_ast(ast_tree: ast.AST) -> List[Dict[str, Any]]:
             for target in node.targets:
                 # Handle how key/value names are
                 # found in ast.Assign.targets[]
-                if isinstance(target, ast.Name):
-                    this_name.append(target.id)
-
-                if isinstance(target, ast.Tuple):
-                    for el in target.elts:
-                        this_name.append(ast.dump(el))
+                this_name.append(parse_literal(target))
 
             this_node = {
               "type": "ASSIGN",
               "name": this_name,
-              "value": parse_primitive(node.value),
+              "value": parse_literal(node.value),
               }
             
             out.append(this_node)
@@ -134,30 +199,29 @@ def parse_ast(ast_tree: ast.AST) -> List[Dict[str, Any]]:
 
             out.append(
               {
-                  "type": "ANNASSIGN",
-                  "name": [this_name],
-                  "value": parse_primitive(node.value),
-                  "assign_type": this_type,
+                "type": "ANNASSIGN",
+                "name": [this_name],
+                "value": parse_literal(node.value),
+                "assign_type": this_type,
               }
             )
 
-
         if isinstance(node, ast.Attribute):
             this_node = {
-                "type": "ATTRIBUTE",
-                "name": node.body.value.id,
-                "attr": node.body.attr,
+              "type": "ATTRIBUTE",
+              "name": node.body.value.id,
+              "attr": node.body.attr,
             }
             pass
 
-        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             this_node = {
-                "type": "FUNCTION",
-                "name": node.name,
-                "args": parse_func_args(node.args),
-                "body": parse_ast(node),
-                "decorator_list": parse_ast(node),
-                "doc": ast.get_docstring(node),
+              "type": "FUNCTION",
+              "name": node.name,
+              "args": parse_func_args(node.args),
+              "body": parse_ast(node),
+              "decorator_list": parse_ast(node),
+              "doc": ast.get_docstring(node, clean=True),
             }
             out.append(this_node)
 
@@ -166,14 +230,15 @@ def parse_ast(ast_tree: ast.AST) -> List[Dict[str, Any]]:
                 "type": "CLASS",
                 "name": node.name,
                 "body": parse_ast(node),
-                "doc": ast.get_docstring(node),
+                "doc": ast.get_docstring(node, clean=True),
             }
             out.append(this_node)
 
-        if isinstance(node, ast.Tuple):
-            this_node = list()
-            for el in node.elts:
-                out.append(el.id)
-            out.append(this_node)
+        else:
+            this_node = {
+              "type": str(type(node)),
+              "name": "",
+              "body": ast.dump(node),
+            }
 
     return out
